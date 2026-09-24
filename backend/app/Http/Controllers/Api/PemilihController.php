@@ -1,0 +1,171 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Pemilih;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
+class PemilihController extends Controller
+{
+    /**
+     * GET /api/pemilih — list semua data pemilih
+     */
+    public function index(Request $request)
+    {
+        $query = Pemilih::query()->orderBy('no')->orderBy('nama');
+
+        if ($request->search) {
+            $s = $request->search;
+            $query->where(function ($q) use ($s) {
+                $q->where('nama', 'like', "%{$s}%")
+                  ->orWhere('nik', 'like', "%{$s}%")
+                  ->orWhere('alamat_dusun', 'like', "%{$s}%")
+                  ->orWhere('no_tps', 'like', "%{$s}%");
+            });
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => $query->get(),
+        ]);
+    }
+
+    /**
+     * POST /api/pemilih — tambah satu data (isi manual)
+     */
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'no'            => 'nullable|integer',
+            'nama'          => 'required|string|max:255',
+            'nik'           => 'required|string|size:16|regex:/^[0-9]+$/|unique:pemilih,nik',
+            'jenis_kelamin' => 'required|in:L,P',
+            'tempat_lahir'  => 'nullable|string|max:100',
+            'tanggal_lahir' => 'nullable|date',
+            'alamat_dusun'  => 'nullable|string|max:100',
+            'alamat_rt'     => 'nullable|string|max:10',
+            'alamat_rw'     => 'nullable|string|max:10',
+            'no_tps'        => 'nullable|string|max:20',
+            'keterangan'    => 'nullable|string|max:255',
+        ]);
+
+        $pemilih = Pemilih::create($validated);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Data pemilih berhasil ditambahkan.',
+            'data'    => $pemilih,
+        ], 201);
+    }
+
+    /**
+     * PUT /api/pemilih/{id} — update satu data pemilih
+     */
+    public function update(Request $request, $id)
+    {
+        $pemilih = Pemilih::findOrFail($id);
+
+        $validated = $request->validate([
+            'no'            => 'nullable|integer',
+            'nama'          => 'required|string|max:255',
+            'nik'           => 'required|string|size:16|unique:pemilih,nik,' . $id,
+            'jenis_kelamin' => 'required|in:L,P',
+            'tempat_lahir'  => 'nullable|string|max:100',
+            'tanggal_lahir' => 'nullable|date',
+            'alamat_dusun'  => 'nullable|string|max:100',
+            'alamat_rt'     => 'nullable|string|max:10',
+            'alamat_rw'     => 'nullable|string|max:10',
+            'no_tps'        => 'nullable|string|max:20',
+            'keterangan'    => 'nullable|string|max:255',
+        ]);
+
+        $pemilih->update($validated);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Data pemilih berhasil diperbarui.',
+            'data'    => $pemilih,
+        ]);
+    }
+
+    /**
+     * DELETE /api/pemilih/{id} — hapus satu data pemilih
+     */
+    public function destroy($id)
+    {
+        $pemilih = Pemilih::findOrFail($id);
+        $pemilih->delete();
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Data pemilih berhasil dihapus.',
+        ]);
+    }
+
+    /**
+     * POST /api/pemilih/import — import batch dari Excel (sudah di-parse di frontend)
+     * Skip baris dengan NIK yang sudah ada (duplikat) — tidak di-overwrite.
+     */
+    public function import(Request $request)
+    {
+        $request->validate([
+            'data'             => 'required|array|min:1',
+            'data.*.nik'       => 'required|string',
+            'data.*.nama'      => 'required|string',
+        ]);
+
+        $rows     = $request->data;
+        $inserted = 0;
+        $skipped  = 0;
+
+        // Ambil semua NIK yang sudah ada sekaligus (efisien)
+        $existingNiks = DB::table('pemilih')
+            ->whereIn('nik', array_column($rows, 'nik'))
+            ->pluck('nik')
+            ->flip()
+            ->all();
+
+        $toInsert = [];
+        $now      = now();
+
+        foreach ($rows as $row) {
+            $nik = trim($row['nik'] ?? '');
+            if (!$nik || isset($existingNiks[$nik])) {
+                $skipped++;
+                continue;
+            }
+            $existingNiks[$nik] = true; // cegah duplikat dalam batch yang sama
+            $toInsert[] = [
+                'no'            => $row['no'] ?? null,
+                'nama'          => trim($row['nama']),
+                'nik'           => $nik,
+                'jenis_kelamin' => strtoupper(substr($row['jenis_kelamin'] ?? 'L', 0, 1)) === 'L' ? 'L' : 'P',
+                'tempat_lahir'  => $row['tempat_lahir'] ?? null,
+                'tanggal_lahir' => !empty($row['tanggal_lahir']) ? $row['tanggal_lahir'] : null,
+                'alamat_dusun'  => $row['alamat_dusun'] ?? null,
+                'alamat_rt'     => $row['alamat_rt'] ?? null,
+                'alamat_rw'     => $row['alamat_rw'] ?? null,
+                'no_tps'        => $row['no_tps'] ?? null,
+                'keterangan'    => $row['keterangan'] ?? null,
+                'created_at'    => $now,
+                'updated_at'    => $now,
+            ];
+            $inserted++;
+        }
+
+        if (!empty($toInsert)) {
+            // Insert dalam chunk untuk performa
+            foreach (array_chunk($toInsert, 500) as $chunk) {
+                DB::table('pemilih')->insert($chunk);
+            }
+        }
+
+        return response()->json([
+            'status'   => 'success',
+            'inserted' => $inserted,
+            'skipped'  => $skipped,
+        ]);
+    }
+}
