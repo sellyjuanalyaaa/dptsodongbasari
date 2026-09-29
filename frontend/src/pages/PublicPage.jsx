@@ -253,7 +253,6 @@ export default function PublicPage() {
         {/* Footer Sekretariat */}
         <div className="text-center pt-2 pb-6 space-y-1">
           <div className="flex items-center justify-center gap-2 text-gray-500 text-xs">
-            <span>*</span>
             <span className="font-medium">Sekretariat:</span>
           </div>
           <p className="text-xs text-gray-500">Kantor Desa Sodong Basari</p>
