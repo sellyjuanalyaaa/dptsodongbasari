@@ -51,6 +51,13 @@ class PemilihController extends Controller
             'keterangan'    => 'nullable|string|max:255',
         ]);
 
+        // Nomor urut unik — kalau sudah terpakai, lanjutkan dari nomor terbesar
+        if (!empty($validated['no']) && Pemilih::where('no', $validated['no'])->exists()) {
+            $validated['no'] = ((int) Pemilih::max('no')) + 1;
+        } elseif (empty($validated['no'])) {
+            $validated['no'] = ((int) Pemilih::max('no')) + 1;
+        }
+
         $pemilih = Pemilih::create($validated);
 
         return response()->json([
@@ -80,6 +87,14 @@ class PemilihController extends Controller
             'no_tps'        => 'nullable|string|max:20',
             'keterangan'    => 'nullable|string|max:255',
         ]);
+
+        // Nomor urut unik — tolak nomor yang sudah dipakai baris lain
+        if (isset($validated['no'])) {
+            $taken = Pemilih::where('no', $validated['no'])->where('id', '!=', $id)->exists();
+            if ($taken || $validated['no'] === null) {
+                $validated['no'] = $pemilih->no ?? (((int) Pemilih::max('no')) + 1);
+            }
+        }
 
         $pemilih->update($validated);
 
@@ -127,6 +142,14 @@ class PemilihController extends Controller
             ->flip()
             ->all();
 
+        // Nomor urut yang sudah terpakai — cegah nomor kembar antar batch import
+        $existingNos = DB::table('pemilih')
+            ->whereNotNull('no')
+            ->pluck('no')
+            ->mapWithKeys(fn ($n) => [(int) $n => true])
+            ->all();
+        $nextNo = (empty($existingNos) ? 0 : max(array_keys($existingNos))) + 1;
+
         $toInsert = [];
         $now      = now();
 
@@ -137,8 +160,17 @@ class PemilihController extends Controller
                 continue;
             }
             $existingNiks[$nik] = true; // cegah duplikat dalam batch yang sama
+
+            // Pakai nomor dari file bila belum dipakai; kalau kembar/kosong, lanjutkan urutan
+            $no = (int) ($row['no'] ?? 0);
+            if ($no <= 0 || isset($existingNos[$no])) {
+                $no = $nextNo;
+            }
+            $nextNo = max($nextNo, $no + 1);
+            $existingNos[$no] = true;
+
             $toInsert[] = [
-                'no'            => $row['no'] ?? null,
+                'no'            => $no,
                 'nama'          => trim($row['nama']),
                 'nik'           => $nik,
                 'jenis_kelamin' => strtoupper(substr($row['jenis_kelamin'] ?? 'L', 0, 1)) === 'L' ? 'L' : 'P',

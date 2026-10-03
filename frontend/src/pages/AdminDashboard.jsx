@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
 import api from '../api/axios';
+import { exportDptPdf } from '../utils/exportDptPdf';
 
 // Translate common Laravel validation messages to Indonesian
 function apiErrorMessage(err, fallback = 'Terjadi kesalahan.') {
@@ -305,6 +306,7 @@ export default function AdminDashboard() {
   const [pemilih, setPemilih] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [tpsFilter, setTpsFilter] = useState('');
   const [editData, setEditData] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [importRows, setImportRows] = useState(null);
@@ -312,7 +314,7 @@ export default function AdminDashboard() {
   const [notification, setNotification] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [deleting, setDeleting] = useState(null);
-  const perPage = 10;
+  const perPage = 30;
 
   const showNotif = (msg, type = 'success') => {
     setNotification({ msg, type });
@@ -522,16 +524,43 @@ export default function AdminDashboard() {
     navigate('/admin/login');
   };
 
-  // Filter & Paginate
-  const filtered = pemilih.filter(p =>
-    [p.nama, p.nik, p.alamat_dusun, p.no_tps].some(v => String(v || '').toLowerCase().includes(search.toLowerCase()))
-  );
+  // Pilihan filter TPS diambil dari data yang ada
+  const tpsOptions = [...new Set(pemilih.map(p => String(p.no_tps || '').trim()).filter(Boolean))]
+    .sort((a, b) => (Number(a) - Number(b)) || a.localeCompare(b));
+
+  // Filter (pencarian + TPS) & Paginate
+  const filtered = pemilih.filter(p => {
+    if (tpsFilter && String(p.no_tps || '') !== tpsFilter) return false;
+    return [p.nama, p.nik, p.alamat_dusun, p.no_tps].some(v =>
+      String(v || '').toLowerCase().includes(search.toLowerCase())
+    );
+  });
   const totalPages = Math.ceil(filtered.length / perPage);
   const paginated = filtered.slice((currentPage - 1) * perPage, currentPage * perPage);
+  const isFiltered = Boolean(tpsFilter || search.trim());
 
-  // Stats
-  const totalL = pemilih.filter(p => p.jenis_kelamin === 'L').length;
-  const totalP = pemilih.filter(p => p.jenis_kelamin === 'P').length;
+  // Stats — mengikuti data yang sedang ditampilkan (ikut filter/pencarian)
+  const totalL = filtered.filter(p => p.jenis_kelamin === 'L').length;
+  const totalP = filtered.filter(p => p.jenis_kelamin === 'P').length;
+
+  // Export PDF format blanko DPT
+  // - Export PDF        : mengikuti filter/pencarian yang sedang aktif
+  // - Export semua data : mengabaikan filter, seluruh baris di database
+  const handleExportPdf = (rows, opts = {}) => {
+    if (!rows.length) {
+      showNotif('Tidak ada data untuk diexport dengan filter ini.', 'error');
+      return;
+    }
+    exportDptPdf(rows, opts);
+  };
+
+  const filterLabel = tpsFilter
+    ? `TPS ${tpsFilter}`
+    : (search.trim() ? `Hasil pencarian: ${search.trim()}` : '');
+  const filterSuffix = tpsFilter
+    ? `TPS_${tpsFilter}`
+    : (search.trim() ? 'hasil_pencarian' : '');
+  const statTag = isFiltered ? ` (${filterLabel || 'filter'})` : '';
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -570,12 +599,12 @@ export default function AdminDashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {/* Statistik Cards */}
+        {/* Statistik Cards — mengikuti filter/pencarian yang sedang aktif */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[
-            { label: 'Total Pemilih', value: pemilih.length, icon: '#', color: '#f96c00', bg: '#fff4ee' },
-            { label: 'Laki-laki', value: totalL, icon: 'M', color: '#3b82f6', bg: '#eff6ff' },
-            { label: 'Perempuan', value: totalP, icon: 'F', color: '#ec4899', bg: '#fdf2f8' },
+            { label: `Total Pemilih${statTag}`, value: filtered.length, icon: '#', color: '#f96c00', bg: '#fff4ee' },
+            { label: `Laki-laki${statTag}`, value: totalL, icon: 'M', color: '#3b82f6', bg: '#eff6ff' },
+            { label: `Perempuan${statTag}`, value: totalP, icon: 'F', color: '#ec4899', bg: '#fdf2f8' },
           ].map(({ label, value, icon, color, bg }) => (
             <div key={label} className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 flex items-center gap-4">
               <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-bold" style={{ background: bg, color }}>
@@ -601,6 +630,16 @@ export default function AdminDashboard() {
                   placeholder="Cari nama, NIK, dusun..."
                   className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:border-orange-400" />
               </div>
+              {/* Filter TPS — di sebelah kanan kolom pencarian */}
+              <select value={tpsFilter}
+                onChange={e => { setTpsFilter(e.target.value); setCurrentPage(1); }}
+                title="Filter No. TPS — berlaku untuk tabel, statistik, dan export PDF"
+                className="px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:border-orange-400 bg-white cursor-pointer">
+                <option value="">Semua TPS</option>
+                {tpsOptions.map(t => (
+                  <option key={t} value={t}>TPS {t}</option>
+                ))}
+              </select>
               {/* Isi Manual Button */}
               <button type="button" onClick={() => setShowAdd(true)}
                 className="text-sm text-center cursor-pointer flex items-center gap-2 py-2.5 px-4 whitespace-nowrap rounded-xl font-semibold text-white transition-all hover:opacity-80"
@@ -612,6 +651,25 @@ export default function AdminDashboard() {
                 ↑ Import Excel
                 <input type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" />
               </label>
+              {/* Export PDF — mengikuti filter/pencarian aktif */}
+              <button type="button"
+                onClick={() => handleExportPdf(filtered, { label: filterLabel, suffix: filterSuffix })}
+                disabled={!filtered.length || loading}
+                title={`Export PDF sesuai filter aktif (${filtered.length} data)${filterLabel ? ` — ${filterLabel}` : ''}`}
+                className="text-sm text-center cursor-pointer flex items-center gap-2 py-2.5 px-4 whitespace-nowrap rounded-xl font-semibold border-2 transition-all hover:bg-orange-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ borderColor: '#f96c00', color: '#f96c00' }}>
+                ⬇ Export PDF{filterLabel ? ` (${filtered.length})` : ''}
+              </button>
+              {/* Export semua data — mengabaikan filter */}
+              {isFiltered && (
+                <button type="button"
+                  onClick={() => handleExportPdf(pemilih, {})}
+                  disabled={!pemilih.length || loading}
+                  title={`Export seluruh data tanpa filter (${pemilih.length} data)`}
+                  className="text-sm text-center cursor-pointer flex items-center gap-2 py-2.5 px-4 whitespace-nowrap rounded-xl font-semibold border-2 border-gray-300 text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                  ⬇ Semua data
+                </button>
+              )}
             </div>
           </div>
 
